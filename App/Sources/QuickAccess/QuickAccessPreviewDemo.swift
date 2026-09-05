@@ -13,7 +13,10 @@ final class QuickAccessPreviewDemo {
 
     func show() {
         stack.addDemoItem = { [weak self] in self?.addItem() }
-        for _ in 0..<5 { addItem() }
+        let countArgument = CommandLine.arguments.first { $0.hasPrefix("--preview-demo-count=") }
+        let count = countArgument.flatMap { Int($0.split(separator: "=").last ?? "") } ?? 5
+        for _ in 0..<max(1, min(30, count)) { addItem() }
+        if CommandLine.arguments.contains("--preview-demo-expanded") { stack.toggleExpanded() }
     }
 
     private func addItem() {

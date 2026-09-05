@@ -37,7 +37,7 @@ final class QuickAccessStackPanel: NSPanel {
         var next = frame
         let newHeight = height
         let visible = (screen ?? NSScreen.main)?.visibleFrame ?? frame
-        if anchoredAtTop { next.origin.y += next.height - newHeight }
+        if stack?.expandsUp == false { next.origin.y += next.height - newHeight }
         next.size.height = newHeight
         next.origin.y = max(visible.minY + QuickAccessMotionStyle.screenInset - gutter,
                             min(next.origin.y, visible.maxY - QuickAccessMotionStyle.screenInset - newHeight))

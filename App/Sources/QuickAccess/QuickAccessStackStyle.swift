@@ -27,6 +27,15 @@ enum QuickAccessStackStyle {
     static let transitionDamping = 0.88
     static let insertionOffset: CGFloat = 20
 
+    nonisolated static func expandedContentHeight(count: Int) -> CGFloat {
+        CGFloat(count) * cardSize.height + CGFloat(max(0, count - 1)) * rowSpacing
+    }
+
+    nonisolated static func expandedViewportHeight(count: Int, visibleHeight: CGFloat) -> CGFloat {
+        let contentHeight = headerHeight + listTopPadding + layerStep * 2 + expandedContentHeight(count: count) + shadowGutter
+        return min(contentHeight, maximumListHeight, visibleHeight - QuickAccessMotionStyle.screenInset * 2)
+    }
+
     nonisolated static func scrollScale(y: CGFloat, expanded: Bool) -> CGFloat {
         guard expanded else { return 1 }
         return min(1, max(minimumScrollScale, minimumScrollScale + (1 - minimumScrollScale) * max(0, y) / scrollDepthDistance))

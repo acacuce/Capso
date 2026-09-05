@@ -6,50 +6,33 @@ struct QuickAccessStackView: View {
     let stack: QuickAccessStackModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var cardHeight: CGFloat { QuickAccessStackStyle.cardSize.height }
-    private var listHeight: CGFloat {
-        stack.expanded ? CGFloat(stack.items.count) * (cardHeight + QuickAccessStackStyle.rowSpacing)
-            : cardHeight + QuickAccessStackStyle.layerStep * 2
-    }
+    private var scrollAnchor: UnitPoint { stack.expandsUp ? .bottom : .top }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            ScrollViewReader { scroll in
-                ScrollView(.vertical) {
-                    ZStack(alignment: .bottom) {
-                        Color.clear.frame(width: 1, height: 1).id("latestAnchor")
-                        ForEach(Array(stack.items.enumerated()), id: \.element.id) { index, entry in
-                            QuickAccessStackRow(entry: entry, index: index, count: stack.items.count,
-                                                expanded: stack.expanded, selected: stack.activeItemID == entry.id)
-                                .onHover { if $0 { stack.activeItemID = entry.id } }
-                                .id(entry.id)
+        ScrollView(.vertical) {
+            QuickAccessCardsLayout(expansion: stack.expanded ? 1 : 0, expandsUp: stack.expandsUp) {
+                header
+                ForEach(Array(stack.items.enumerated()), id: \.element.id) { index, entry in
+                    QuickAccessStackRow(entry: entry, index: index, count: stack.items.count,
+                                        expanded: stack.expanded, selected: stack.activeItemID == entry.id,
+                                        showsOverflowCue: stack.expanded && index == 0 && !entry.isRecording && stack.hasOverflow)
+                        .onHover { inside in
+                            if inside { stack.activeItemID = entry.id }
+                            stack.cardHoverChanged(id: entry.id, inside: inside)
                         }
-                    }
-                    .frame(width: QuickAccessStackStyle.cardSize.width, height: listHeight, alignment: .bottom)
-                    .padding(.horizontal, QuickAccessStackStyle.shadowGutter)
-                    .padding(.top, QuickAccessStackStyle.listTopPadding)
-                    .padding(.bottom, QuickAccessStackStyle.shadowGutter)
-                }
-                .scrollIndicators(stack.expanded ? .automatic : .hidden)
-                .scrollDisabled(!stack.expanded)
-                .defaultScrollAnchor(.bottom)
-                .defaultScrollAnchor(.bottom, for: .sizeChanges)
-                .onChange(of: stack.items.first?.id) { _, id in
-                    if id != nil { withAnimation(stack.animation) { scroll.scrollTo("latestAnchor", anchor: .bottom) } }
-                }
-                .onChange(of: stack.expanded) { _, _ in
-                    Task { @MainActor in
-                        await Task.yield()
-                        scroll.scrollTo("latestAnchor", anchor: .bottom)
-                    }
+                        .id(entry.id)
                 }
             }
+            .frame(width: QuickAccessStackStyle.cardSize.width)
+            .padding(.horizontal, QuickAccessStackStyle.shadowGutter)
+            .padding(.bottom, QuickAccessStackStyle.shadowGutter)
         }
+        .scrollIndicators(.never)
+        .scrollDisabled(!stack.expanded)
+        .defaultScrollAnchor(scrollAnchor)
+        .defaultScrollAnchor(scrollAnchor, for: .sizeChanges)
         .frame(height: stack.expanded ? stack.viewportHeight : QuickAccessStackStyle.collapsedHeight)
-        .contentShape(Rectangle())
-        .onHover { stack.hoverChanged($0) }
-        .frame(height: stack.viewportHeight, alignment: .bottom)
+        .frame(height: stack.viewportHeight, alignment: stack.expandsUp ? .bottom : .top)
     }
 
     private var header: some View {
@@ -65,17 +48,15 @@ struct QuickAccessStackView: View {
                     .accessibilityLabel("Add demo screenshot")
             }
             #endif
-            Button {
-                stack.toggleExpanded()
-            } label: {
-                Label(stack.expanded ? "Collapse" : "Expand", systemImage: stack.expanded ? "chevron.down" : "chevron.up")
-                    .font(.system(size: 11, weight: .semibold))
-            }
-            .buttonStyle(.plain)
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 10)
         .frame(width: QuickAccessStackStyle.cardSize.width, height: QuickAccessStackStyle.headerHeight)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .background { QuickAccessWindowDragSurface() }
+        .help("Drag to move captures")
     }
 }
 
@@ -96,6 +77,7 @@ private struct QuickAccessStackRow: View {
     let count: Int
     let expanded: Bool
     let selected: Bool
+    let showsOverflowCue: Bool
 
     var body: some View {
         content
@@ -103,14 +85,11 @@ private struct QuickAccessStackRow: View {
                 .modifier(QuickAccessCardShadow())
                 .scaleEffect(expanded ? 1 : max(QuickAccessStackStyle.minimumLayerScale, 1 - CGFloat(index) * QuickAccessStackStyle.layerScaleStep), anchor: .bottom)
                 .rotationEffect(.degrees(expanded || index == 0 ? 0 : QuickAccessStackStyle.layerAngles[min(index, QuickAccessStackStyle.visibleDepth - 1)]))
-                .offset(y: -rowOffset)
                 .opacity(expanded || index < QuickAccessStackStyle.visibleDepth ? 1 : 0)
                 .allowsHitTesting(expanded || index == 0)
                 .accessibilityHidden(!expanded && index != 0)
                 .zIndex(Double(count - index))
-                .visualEffect { view, geometry in
-                    view.scaleEffect(QuickAccessStackStyle.scrollScale(y: geometry.frame(in: .scrollView).minY - rowOffset, expanded: expanded), anchor: .bottom)
-                }
+                .scaleEffect(showsOverflowCue ? QuickAccessStackStyle.minimumScrollScale : 1, anchor: .bottom)
                 .transition(.asymmetric(insertion: .offset(y: QuickAccessStackStyle.insertionOffset).combined(with: .opacity), removal: .opacity))
     }
 
@@ -123,8 +102,40 @@ private struct QuickAccessStackRow: View {
         }
     }
 
-    nonisolated private var rowOffset: CGFloat {
-        expanded ? CGFloat(index) * (QuickAccessStackStyle.cardSize.height + QuickAccessStackStyle.rowSpacing)
-            : CGFloat(min(index, QuickAccessStackStyle.visibleDepth - 1)) * QuickAccessStackStyle.layerStep
+}
+// Layout positions participate in ScrollView geometry and clipping. Visual
+// offsets alone leave every row occupying the same bottom-most layout slot.
+struct QuickAccessCardsLayout: Layout {
+    var expansion: CGFloat
+    var expandsUp: Bool
+    var animatableData: CGFloat {
+        get { expansion }
+        set { expansion = newValue }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let style = QuickAccessStackStyle.self
+        let collapsed = style.collapsedHeight - style.shadowGutter
+        let expanded = style.expandedContentHeight(count: max(0, subviews.count - 1))
+            + style.headerHeight + style.listTopPadding + style.layerStep * 2
+        return CGSize(width: style.cardSize.width, height: collapsed + (expanded - collapsed) * expansion)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let header = subviews.first else { return }
+        let style = QuickAccessStackStyle.self
+        let headerGap = style.headerHeight + style.listTopPadding
+        let collapsedTop = headerGap + style.layerStep * 2
+        let frontY = expandsUp ? bounds.maxY - style.cardSize.height : bounds.minY + collapsedTop
+        header.place(at: CGPoint(x: bounds.midX, y: frontY - headerGap), anchor: .top,
+                     proposal: ProposedViewSize(width: style.cardSize.width, height: style.headerHeight))
+        for (index, subview) in subviews.dropFirst().enumerated() {
+            let collapsedOffset = -CGFloat(min(index, style.visibleDepth - 1)) * style.layerStep
+            let distance = CGFloat(index) * (style.cardSize.height + style.rowSpacing)
+            let expandedOffset = expandsUp ? -distance - (index > 0 ? headerGap : 0) : distance
+            let offset = collapsedOffset + (expandedOffset - collapsedOffset) * expansion
+            subview.place(at: CGPoint(x: bounds.midX, y: frontY + offset), anchor: .top,
+                          proposal: ProposedViewSize(style.cardSize))
+        }
     }
 }

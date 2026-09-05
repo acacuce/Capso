@@ -4,6 +4,41 @@ import XCTest
 
 @MainActor
 final class QuickAccessStackModelTests: XCTestCase {
+    func testExpandedWindowFitsTwoCardsAndResizesWhenMembershipChanges() throws {
+        let stack = QuickAccessStackModel()
+        defer { stack.stop() }
+        var items = try (0..<2).map { try XCTUnwrap(QuickAccessPreviewDemo.makeItem(index: $0)) }
+        stack.update(items: items)
+        let panel = try XCTUnwrap(stack.panel)
+        let bottom = panel.frame.minY
+        stack.expand()
+        XCTAssertEqual(stack.viewportHeight, 504)
+        XCTAssertEqual(panel.frame.height, 504)
+        XCTAssertEqual(panel.frame.minY, bottom, accuracy: 1)
+        items.append(try XCTUnwrap(QuickAccessPreviewDemo.makeItem(index: 2)))
+        stack.update(items: items)
+        XCTAssertEqual(panel.frame.height, stack.viewportHeight)
+        XCTAssertLessThanOrEqual(stack.viewportHeight, QuickAccessStackStyle.maximumListHeight)
+        stack.update(items: Array(items.prefix(2)))
+        XCTAssertEqual(panel.frame.height, 504)
+    }
+
+    func testTopPositionExpandsDownWithoutMovingFrontCard() throws {
+        let stack = QuickAccessStackModel()
+        defer { stack.stop() }
+        stack.update(items: try (0..<2).map { try XCTUnwrap(QuickAccessPreviewDemo.makeItem(index: $0)) })
+        let panel = try XCTUnwrap(stack.panel)
+        let screen = try XCTUnwrap(panel.screen)
+        panel.setFrameOrigin(CGPoint(x: panel.frame.minX, y: screen.visibleFrame.maxY - panel.frame.height - 16))
+        let top = panel.frame.maxY
+        stack.expand()
+        XCTAssertFalse(stack.expandsUp)
+        XCTAssertEqual(panel.frame.maxY, top, accuracy: 1)
+        XCTAssertFalse(stack.hasOverflow)
+        stack.update(items: try (0..<8).map { try XCTUnwrap(QuickAccessPreviewDemo.makeItem(index: $0)) })
+        XCTAssertTrue(stack.hasOverflow)
+    }
+
     func testCountIsNotCappedAtFiveAndIdentitySurvivesExpansion() throws {
         let stack = QuickAccessPreviewDemo.previewStack(count: 12)
         let identities = stack.items.map(\.id)
