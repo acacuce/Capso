@@ -4,7 +4,6 @@ import SwiftUI
 /// only changes their geometry; upload/action state isn't recreated on hover.
 struct QuickAccessStackView: View {
     let stack: QuickAccessStackModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var scrollAnchor: UnitPoint { stack.expandsUp ? .bottom : .top }
 
@@ -28,6 +27,10 @@ struct QuickAccessStackView: View {
             .padding(.bottom, QuickAccessStackStyle.shadowGutter)
         }
         .scrollIndicators(.never)
+        .scrollBounceBehavior(.basedOnSize)
+        .onScrollPhaseChange { _, phase in
+            stack.scrollInteractionChanged(active: phase != .idle)
+        }
         .scrollDisabled(!stack.expanded)
         .defaultScrollAnchor(scrollAnchor)
         .defaultScrollAnchor(scrollAnchor, for: .sizeChanges)

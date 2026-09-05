@@ -39,6 +39,19 @@ final class QuickAccessStackModelTests: XCTestCase {
         XCTAssertTrue(stack.hasOverflow)
     }
 
+    func testScrollMomentumKeepsStackOpenAfterPointerLeaves() async {
+        let stack = QuickAccessPreviewDemo.previewStack(count: 12)
+        defer { stack.stop() }
+        stack.expand()
+        stack.scrollInteractionChanged(active: true)
+        stack.hoverChanged(false)
+        try? await Task.sleep(for: .milliseconds(450))
+        XCTAssertTrue(stack.expanded)
+        stack.scrollInteractionChanged(active: false)
+        try? await Task.sleep(for: .milliseconds(450))
+        XCTAssertFalse(stack.expanded)
+    }
+
     func testCountIsNotCappedAtFiveAndIdentitySurvivesExpansion() throws {
         let stack = QuickAccessPreviewDemo.previewStack(count: 12)
         let identities = stack.items.map(\.id)

@@ -14,6 +14,7 @@ final class QuickAccessStackModel {
     private var collapseTask: Task<Void, Never>?
     private var resizeTask: Task<Void, Never>?
     private var dragging = false
+    private var scrolling = false
     private var hovered = false
     private var hoveredItems: Set<UUID> = []
     private var pinnedOpen = false
@@ -69,6 +70,7 @@ final class QuickAccessStackModel {
         hovered = false
         hoveredItems.removeAll()
         dragging = false
+        scrolling = false
     }
 
     var hasOverflow: Bool {
@@ -120,6 +122,14 @@ final class QuickAccessStackModel {
         items.forEach { $0.setStackInteractionActive(hovered) }
     }
 
+    /// SwiftUI reports tracking, interaction and momentum without polling.
+    /// Keep the list and its items alive until scrolling returns to idle.
+    func scrollInteractionChanged(active: Bool) {
+        guard scrolling != active else { return }
+        scrolling = active
+        hoverChanged(hovered)
+    }
+
     func cardHoverChanged(id: UUID, inside: Bool) {
         if inside { hoveredItems.insert(id) } else { hoveredItems.remove(id) }
         hoverChanged(!hoveredItems.isEmpty)
@@ -129,8 +139,8 @@ final class QuickAccessStackModel {
         hovered = inside
         if !inside { suppressHoverUntilExit = false }
         collapseTask?.cancel()
-        items.forEach { $0.setStackInteractionActive(inside || dragging || (expanded && pinnedOpen)) }
-        guard !dragging else { return }
+        items.forEach { $0.setStackInteractionActive(inside || dragging || scrolling || (expanded && pinnedOpen)) }
+        guard !dragging, !scrolling else { return }
         if inside && !expanded && !suppressHoverUntilExit {
             // A short dwell keeps passing the pointer over the pile from opening it.
             collapseTask = Task { @MainActor [weak self] in
