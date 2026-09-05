@@ -13,6 +13,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `@NSApplicationDelegateAdaptor` proxy wrapping.
     static private(set) var shared: AppDelegate?
 
+    #if DEBUG
+    private var previewDemo: QuickAccessWindow?
+    #endif
+
     private var menuBarController: MenuBarController?
     let settings = AppSettings()
     let permissionManager = PermissionManager()
@@ -35,6 +39,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             return
         }
+
+        #if DEBUG
+        if CommandLine.arguments.contains("--preview-demo") {
+            previewDemo = QuickAccessPreviewDemo.makeWindow()
+            previewDemo?.show()
+            return
+        }
+        #endif
 
         Self.shared = self
         DiagnosticLogger.installUncaughtExceptionHandler()

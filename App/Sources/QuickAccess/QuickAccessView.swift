@@ -79,6 +79,7 @@ struct QuickAccessView: View {
             .frame(height: 34)
         }
         .padding(8)
+        .background(QuickAccessWindowDragSurface())
         .background(hiddenEscapeButton)
         .background(
             .ultraThinMaterial,
@@ -133,7 +134,7 @@ struct QuickAccessView: View {
                         .stroke(Color.primary.opacity(0.12), lineWidth: 0.5)
                 )
                 .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .onTapGesture(count: 2, perform: onPreview)
+                .overlay(QuickAccessWindowDragSurface(onDoubleClick: onPreview))
                 .help("Double-click to preview")
                 .accessibilityLabel(Text("Screenshot preview"))
                 .accessibilityHint(Text("Double-click to enlarge preview"))

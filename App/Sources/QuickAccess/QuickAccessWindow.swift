@@ -22,6 +22,8 @@ final class QuickAccessWindow: NSPanel {
     /// Called with the public URL string when a cloud upload succeeds.
     var onUploadSucceeded: ((String) -> Void)?
 
+    private lazy var snapMotion = QuickAccessSnapMotion(window: self)
+    private var wasDragged = false
     private var autoDismissTimer: Timer?
     private var alphaValueBeforeDrag: CGFloat?
     private let settings: AppSettings
@@ -62,7 +64,7 @@ final class QuickAccessWindow: NSPanel {
         self.backgroundColor = .clear
         self.hasShadow = false
         self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
-        self.isMovableByWindowBackground = true
+        self.isMovableByWindowBackground = false
         self.animationBehavior = .utilityWindow
         self.hidesOnDeactivate = false
 
@@ -105,6 +107,8 @@ final class QuickAccessWindow: NSPanel {
         hostingView.layer?.cornerCurve = .continuous
         hostingView.layer?.masksToBounds = true
 
+        NotificationCenter.default.addObserver(self, selector: #selector(screenGeometryChanged), name: NSApplication.didChangeScreenParametersNotification, object: nil)
+
         self.contentView = hostingView
         self.contentView?.wantsLayer = true
         self.contentView?.layer?.backgroundColor = NSColor.clear.cgColor
@@ -133,7 +137,7 @@ final class QuickAccessWindow: NSPanel {
     func show() {
         let finalFrame = frame
         var startFrame = finalFrame
-        startFrame.origin.y -= 20
+        startFrame.origin.y += 20
         setFrame(startFrame, display: false)
         alphaValue = 0
 
@@ -143,14 +147,30 @@ final class QuickAccessWindow: NSPanel {
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.3
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            self.animator().setFrame(finalFrame, display: true)
             self.animator().alphaValue = 1
         }
 
         scheduleAutoDismissTimerIfNeeded()
     }
 
+    @objc private func screenGeometryChanged() {
+        guard isVisible else { return }
+        snapMotion.snap(followsPointer: false)
+    }
+
+    func beginPreviewDrag() {
+        wasDragged = true
+        snapMotion.cancel()
+        stopAutoDismissTimer()
+    }
+
+    func endPreviewDrag(velocity: CGPoint) {
+        snapMotion.snap(velocity: velocity)
+        scheduleAutoDismissTimerIfNeeded()
+    }
+
     override func close() {
+        snapMotion.cancel()
         stopAutoDismissTimer()
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.2
@@ -162,6 +182,7 @@ final class QuickAccessWindow: NSPanel {
 
     /// Evict this preview off-screen to the left with a slide animation.
     func slideOffLeftAndClose() {
+        snapMotion.cancel()
         stopAutoDismissTimer()
         var target = frame
         target.origin.x = -(target.width + 40)
@@ -177,6 +198,7 @@ final class QuickAccessWindow: NSPanel {
 
     /// Reposition this window within a stack, centering the group when requested.
     func repositionForStack(index: Int, count: Int, animated: Bool = true) {
+        guard !wasDragged else { return }
         let newFrame = QuickAccessStackGeometry.frame(
             position: settings.quickAccessPosition,
             screenFrame: targetScreen.frame,
@@ -187,11 +209,7 @@ final class QuickAccessWindow: NSPanel {
         )
 
         if animated {
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.25
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                self.animator().setFrame(newFrame, display: true)
-            }
+            snapMotion.move(to: newFrame.origin)
         } else {
             setFrame(newFrame, display: true)
         }
