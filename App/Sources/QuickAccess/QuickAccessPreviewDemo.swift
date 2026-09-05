@@ -2,46 +2,65 @@
 import AppKit
 import CaptureKit
 import SharedKit
+import SwiftUI
 
-/// Launch with --preview-demo to exercise the real stack with generated pixels.
-/// No screen capture, history entries, or uploads are involved.
+/// Both Xcode previews and the live --preview-demo use the production SwiftUI
+/// views, with synthetic pixels and isolated settings. No capture or upload.
 @MainActor
 final class QuickAccessPreviewDemo {
-    private let stack = QuickAccessStackController()
-    private var windows: [QuickAccessWindow] = []
+    private let stack = QuickAccessStackModel()
+    private var items: [QuickAccessItem] = []
 
     func show() {
-        guard let defaults = UserDefaults(suiteName: "Capso.PreviewDemo") else { return }
-        let settings = AppSettings(defaults: defaults)
-        settings.quickAccessAutoClose = false
-        let colors: [NSColor] = [.systemIndigo, .systemOrange, .systemPink, .systemBlue, .systemTeal]
-        for (index, color) in colors.enumerated() {
-            guard let image = makeImage(color: color, index: index) else { continue }
-            let panel = QuickAccessWindow(
-                result: CaptureResult(image: image, mode: .area, captureRect: CGRect(x: 0, y: 0, width: 800, height: 450)),
-                settings: settings, screen: NSScreen.main, shareCoordinator: nil, autoUpload: false
-            )
-            panel.onClose = { [weak self, weak panel] in
-                guard let self, let panel else { return }
-                self.windows.removeAll { $0 === panel }
-                panel.close()
-                self.stack.update(windows: self.windows)
-            }
-            windows.append(panel)
-            panel.show()
-        }
-        stack.update(windows: windows)
+        stack.addDemoItem = { [weak self] in self?.addItem() }
+        for _ in 0..<5 { addItem() }
     }
 
-    private func makeImage(color: NSColor, index: Int) -> CGImage? {
+    private func addItem() {
+        guard let item = Self.makeItem(index: items.count) else { return }
+        item.onClose = { [weak self, weak item] in
+            guard let self, let item else { return }
+            self.items.removeAll { $0 === item }
+            item.close()
+            self.stack.update(items: self.items)
+        }
+        items.append(item)
+        stack.update(items: items)
+    }
+
+    static func previewStack(count: Int = 5, expanded: Bool = false) -> QuickAccessStackModel {
+        let stack = QuickAccessStackModel()
+        stack.loadPreviewItems((0..<count).compactMap { makeItem(index: $0) }, expanded: expanded)
+        return stack
+    }
+
+    static func makeItem(index: Int) -> QuickAccessItem? {
         guard let context = CGContext(data: nil, width: 800, height: 450, bitsPerComponent: 8,
                                       bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        context.setFillColor(color.cgColor)
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let defaults = UserDefaults(suiteName: "Capso.PreviewDemo") else { return nil }
+        let colors: [NSColor] = [.systemIndigo, .systemOrange, .systemPink, .systemBlue, .systemTeal]
+        context.setFillColor(colors[index % colors.count].cgColor)
         context.fill(CGRect(x: 0, y: 0, width: 800, height: 450))
         context.setFillColor(NSColor.white.withAlphaComponent(0.4).cgColor)
-        context.fillEllipse(in: CGRect(x: 100 + index * 65, y: 90, width: 260, height: 260))
-        return context.makeImage()
+        context.fillEllipse(in: CGRect(x: 100 + (index % 5) * 65, y: 90, width: 260, height: 260))
+        guard let image = context.makeImage() else { return nil }
+        let settings = AppSettings(defaults: defaults)
+        settings.quickAccessAutoClose = false
+        return QuickAccessItem(result: CaptureResult(image: image, mode: .area, captureRect: CGRect(x: 0, y: 0, width: 800, height: 450)),
+                               settings: settings, screen: NSScreen.main, shareCoordinator: nil, autoUpload: false)
     }
+}
+
+#Preview("Collapsed screenshots") {
+    QuickAccessStackView(stack: QuickAccessPreviewDemo.previewStack())
+        .environment(\.quickAccessStaticPreview, true)
+        .background(Color(nsColor: .windowBackgroundColor))
+}
+
+#Preview("Scrolling screenshots") {
+    QuickAccessStackView(stack: QuickAccessPreviewDemo.previewStack(count: 12, expanded: true))
+        .environment(\.quickAccessStaticPreview, true)
+        .background(Color(nsColor: .windowBackgroundColor))
 }
 #endif

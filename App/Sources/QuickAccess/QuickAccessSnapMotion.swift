@@ -1,11 +1,13 @@
 import AppKit
+import QuartzCore
 
-/// Drives one window. Dragging cancels the timer; layout changes retarget the
+/// Drives one window. Dragging cancels the display link; layout changes retarget the
 /// same spring. No queued NSWindow animations can pull a re-grabbed card away.
 @MainActor
 final class QuickAccessSnapMotion {
     private weak var window: NSWindow?
-    private var timer: Timer?
+    private var displayLink: CADisplayLink?
+    private lazy var displayTarget = DisplayTarget(owner: self)
     private var spring = QuickAccessSpring(position: .zero, target: .zero)
     private var lastTime: TimeInterval = 0
     private var usableFrame: CGRect?
@@ -13,11 +15,11 @@ final class QuickAccessSnapMotion {
     init(window: NSWindow) { self.window = window }
 
     func cancel() {
-        timer?.invalidate()
-        timer = nil
+        displayLink?.invalidate()
+        displayLink = nil
     }
 
-    static func destination(frame: CGRect, visibleFrame: CGRect, velocity: CGPoint) -> CGPoint {
+    nonisolated static func destination(frame: CGRect, visibleFrame: CGRect, velocity: CGPoint) -> CGPoint {
         let bounds = visibleFrame.insetBy(dx: QuickAccessMotionStyle.screenInset, dy: QuickAccessMotionStyle.screenInset)
         let projected = CGPoint(
             x: frame.midX + velocity.x * QuickAccessMotionStyle.flickProjectionTime,
@@ -50,14 +52,22 @@ final class QuickAccessSnapMotion {
             window.setFrameOrigin(point)
             return
         }
-        guard timer == nil else { return }
+        guard displayLink == nil else { return }
         spring.position = window.frame.origin
         lastTime = ProcessInfo.processInfo.systemUptime
-        let timer = Timer(timeInterval: QuickAccessMotionStyle.frameInterval, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.step() }
+        let link = window.displayLink(target: displayTarget, selector: #selector(DisplayTarget.tick(_:)))
+        displayLink = link
+        link.add(to: .main, forMode: .common)
+    }
+
+    // CADisplayLink retains its target. A weak proxy keeps window teardown safe.
+    @MainActor private final class DisplayTarget: NSObject {
+        weak var owner: QuickAccessSnapMotion?
+        init(owner: QuickAccessSnapMotion) { self.owner = owner }
+        @objc func tick(_ link: CADisplayLink) {
+            guard let owner else { link.invalidate(); return }
+            owner.step()
         }
-        self.timer = timer
-        RunLoop.main.add(timer, forMode: .common)
     }
 
     private func step() {

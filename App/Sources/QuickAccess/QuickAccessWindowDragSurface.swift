@@ -1,44 +1,77 @@
 import AppKit
 import SwiftUI
 
-/// Background-only drag surface: buttons and the file-export drag control keep
-/// their own event handling.
-struct QuickAccessWindowDragSurface: NSViewRepresentable {
-    var onDoubleClick: (() -> Void)?
-    func makeNSView(context: Context) -> DragView {
-        let view = DragView()
-        view.onDoubleClick = onDoubleClick
-        return view
-    }
-    func updateNSView(_ nsView: DragView, context: Context) { nsView.onDoubleClick = onDoubleClick }
+extension EnvironmentValues {
+    @Entry var quickAccessWindow: QuickAccessStackPanel? = nil
+}
 
-    final class DragView: NSView {
-        var onDoubleClick: (() -> Void)?
-        override var mouseDownCanMoveWindow: Bool { false }
-        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-        override func mouseDown(with event: NSEvent) {
-            if event.clickCount == 2, let onDoubleClick { onDoubleClick(); return }
-            guard let panel = window as? QuickAccessWindow else { return }
-            panel.beginPreviewDrag()
-            let start = NSEvent.mouseLocation
-            let origin = panel.frame.origin
-            var previous = start
-            var timestamp = event.timestamp
-            var velocity = CGPoint.zero
-            while let next = panel.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
-                let point = NSEvent.mouseLocation
-                if next.type == .leftMouseUp {
-                    if next.timestamp - timestamp > QuickAccessMotionStyle.releasePause { velocity = .zero }
-                    panel.endPreviewDrag(velocity: velocity)
-                    break
-                }
-                let dt = max(QuickAccessMotionStyle.minimumDragSampleTime, next.timestamp - timestamp)
-                velocity = CGPoint(x: (point.x - previous.x) / dt, y: (point.y - previous.y) / dt)
-                panel.movePreviewDrag(to: CGPoint(x: origin.x + point.x - start.x, y: origin.y + point.y - start.y))
-                previous = point
-                timestamp = next.timestamp
+/// SwiftUI owns gesture recognition/cancellation. Screen-space samples avoid
+/// feedback from the window moving beneath the pointer during a drag.
+struct QuickAccessWindowDragSurface: View {
+    var onDoubleClick: (() -> Void)?
+    @Environment(\.quickAccessWindow) private var window
+    @GestureState private var gestureActive = false
+    @State private var drag: WindowDragSample?
+
+    var body: some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 3)
+                    .updating($gestureActive) { _, active, _ in active = true }
+                    .onChanged { _ in updateDrag() }
+                    .onEnded { _ in finishDrag() }
+            )
+            .onTapGesture(count: 2) { onDoubleClick?() }
+            .onChange(of: gestureActive) { _, active in
+                if !active { finishDrag() }
             }
+    }
+
+    private func updateDrag() {
+        guard let window else { return }
+        let point = NSEvent.mouseLocation
+        let now = ProcessInfo.processInfo.systemUptime
+        if drag == nil {
+            window.beginPreviewDrag()
+            drag = WindowDragSample(pointer: point, origin: window.frame.origin, time: now)
         }
+        guard var sample = drag else { return }
+        sample.update(pointer: point, time: now)
+        window.movePreviewDrag(to: sample.windowOrigin)
+        drag = sample
+    }
+
+    private func finishDrag() {
+        guard let sample = drag else { return }
+        drag = nil
+        let paused = ProcessInfo.processInfo.systemUptime - sample.time > QuickAccessMotionStyle.releasePause
+        window?.endPreviewDrag(velocity: paused ? .zero : sample.velocity)
     }
 }
 
+private struct WindowDragSample {
+    let initialPointer: CGPoint
+    let initialOrigin: CGPoint
+    var pointer: CGPoint
+    var time: TimeInterval
+    var velocity = CGPoint.zero
+
+    init(pointer: CGPoint, origin: CGPoint, time: TimeInterval) {
+        initialPointer = pointer
+        initialOrigin = origin
+        self.pointer = pointer
+        self.time = time
+    }
+
+    var windowOrigin: CGPoint {
+        CGPoint(x: initialOrigin.x + pointer.x - initialPointer.x, y: initialOrigin.y + pointer.y - initialPointer.y)
+    }
+
+    mutating func update(pointer: CGPoint, time: TimeInterval) {
+        let dt = max(QuickAccessMotionStyle.minimumDragSampleTime, time - self.time)
+        velocity = CGPoint(x: (pointer.x - self.pointer.x) / dt, y: (pointer.y - self.pointer.y) / dt)
+        self.pointer = pointer
+        self.time = time
+    }
+}

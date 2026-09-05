@@ -6,6 +6,7 @@ import SharedKit
 import ShareKit
 
 struct QuickAccessView: View {
+    @Environment(\.quickAccessStaticPreview) private var isStaticPreview
     let thumbnail: NSImage
     let captureImage: CGImage           // used for cloud upload (temp-file write)
     let dimensions: String           // e.g. "1920×1080"
@@ -30,6 +31,13 @@ struct QuickAccessView: View {
     let onDragStarted: () -> Void
     let onDragEnded: () -> Void
     let onClose: () -> Void
+
+    var shortcutsEnabled = true
+    func keyboardActionsEnabled(_ enabled: Bool) -> Self {
+        var copy = self
+        copy.shortcutsEnabled = enabled
+        return copy
+    }
 
     @State private var isHovering = false
     @State private var hoveredAction: HoverAction?
@@ -79,7 +87,7 @@ struct QuickAccessView: View {
             .frame(height: 34)
         }
         .padding(8)
-        .background(QuickAccessWindowDragSurface())
+        .background { if !isStaticPreview { QuickAccessWindowDragSurface() } }
         .background(hiddenEscapeButton)
         .background(
             .ultraThinMaterial,
@@ -90,13 +98,10 @@ struct QuickAccessView: View {
             RoundedRectangle(cornerRadius: Self.panelCornerRadius, style: .continuous)
                 .stroke(panelStroke, lineWidth: 0.5)
         )
-        .shadow(color: .black.opacity(0.24), radius: 18, y: 8)
-        .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
         .offset(y: isRevealed ? -2 : 0)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.26), value: isRevealed)
         .onHover { isHovering = $0 }
         .onAppear {
-            prepareDragFileIfNeeded()
             startAutoUploadIfNeeded()
         }
         .onDisappear { cleanupPreparedDragFile() }
@@ -134,7 +139,7 @@ struct QuickAccessView: View {
                         .stroke(Color.primary.opacity(0.12), lineWidth: 0.5)
                 )
                 .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .overlay(QuickAccessWindowDragSurface(onDoubleClick: onPreview))
+                .overlay { if !isStaticPreview { QuickAccessWindowDragSurface(onDoubleClick: onPreview) } }
                 .help("Double-click to preview")
                 .accessibilityLabel(Text("Screenshot preview"))
                 .accessibilityHint(Text("Double-click to enlarge preview"))
@@ -309,7 +314,7 @@ struct QuickAccessView: View {
     private var dragTool: some View {
         ZStack {
             dragToolFace
-            QuickAccessDragSourceView(
+            if !isStaticPreview { QuickAccessDragSourceView(
                 thumbnail: thumbnail,
                 dragImageSize: Self.thumbnailSize,
                 fileURLProvider: dragFileURL,
@@ -319,6 +324,7 @@ struct QuickAccessView: View {
             .frame(width: 29, height: 28)
             .disabled(dragError != nil)
             .accessibilityHidden(true)
+            }
         }
         .onHover { hovering in
             hoveredAction = hovering ? .drag : nil
@@ -515,7 +521,7 @@ struct QuickAccessView: View {
         // whenever the Quick Access panel is key. `.nonactivatingPanel` + canBecomeKey=true
         // means shortcuts work while the panel is frontmost in our app, without stealing
         // focus from other apps.
-        if let shortcut = shortcut(for: kind) {
+        if shortcutsEnabled, let shortcut = shortcut(for: kind) {
             button.keyboardShortcut(shortcut.key, modifiers: shortcut.modifiers)
         } else {
             button
@@ -560,12 +566,13 @@ struct QuickAccessView: View {
         }
     }
 
-    private var hiddenEscapeButton: some View {
-        Button(action: onClose) { EmptyView() }
+    @ViewBuilder private var hiddenEscapeButton: some View {
+        if shortcutsEnabled { Button(action: onClose) { EmptyView() }
             .keyboardShortcut(.escape, modifiers: [])
             .opacity(0)
             .frame(width: 0, height: 0)
             .allowsHitTesting(false)
+        }
     }
 
     private var toolDivider: some View {
@@ -650,4 +657,8 @@ private struct FailureToast: View {
             return String(localized: "Upload failed: \(detail)")
         }
     }
+}
+
+extension EnvironmentValues {
+    @Entry var quickAccessStaticPreview = false
 }

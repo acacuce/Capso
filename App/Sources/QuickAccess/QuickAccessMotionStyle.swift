@@ -12,17 +12,12 @@ enum QuickAccessMotionStyle {
     // A unit-mass spring: acceleration = stiffness * displacement - damping * velocity.
     static let stiffness: CGFloat = 320
     static let damping: CGFloat = 32
-    static let frameInterval: TimeInterval = 1 / 120
     static let maximumFrameTime: TimeInterval = 1 / 30
     static let integrationSubsteps = 4
     static let settledDistance: CGFloat = 0.5
     static let settledSpeed: CGFloat = 4
 
-    static let entranceOffset: CGFloat = 20
-    static let fadeInDuration: TimeInterval = 0.3
-    static let evictionMargin: CGFloat = 40
-    static let evictionDuration: TimeInterval = 0.38
-    static let fadeOutDuration: TimeInterval = 0.2
+
 }
 
 /// Floating-point state is independent of AppKit's pixel-rounded window frame.

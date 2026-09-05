@@ -17,10 +17,8 @@ final class CaptureCoordinator {
     private var isSelectionFlowStarting = false
     /// Retained previews in capture order (oldest first). Per-display stack
     /// controllers present the newest card on top and expand on hover.
-    private var quickAccessWindows: [QuickAccessWindow] = []
-    private var quickAccessStacks: [CGDirectDisplayID: QuickAccessStackController] = [:]
-    /// Retention is separate from the three-layer collapsed visual depth.
-    private let maxQuickAccessStackSize = 5
+    private var quickAccessItems: [QuickAccessItem] = []
+    private var quickAccessStacks: [CGDirectDisplayID: QuickAccessStackModel] = [:]
     private var quickAccessPreviewWindow: QuickAccessPreviewWindow?
     private(set) var annotationWindow: AnnotationEditorWindow?
     private var inlineAnnotationWindow: InlineAnnotationEditorWindow?
@@ -1603,16 +1601,11 @@ final class CaptureCoordinator {
         autoUpload: Bool,
         preferredFileURL: URL? = nil,
         pasteboard: NSPasteboard = .general
-    ) -> QuickAccessWindow {
-        // Keep the existing retention cap; older captures remain in History.
-        // The presentation controller caps the number of visible pile layers.
-        while quickAccessWindows.count >= maxQuickAccessStackSize {
-            let oldest = quickAccessWindows.removeFirst()
-            oldest.slideOffLeftAndClose()
-        }
-
+    ) -> QuickAccessItem {
+        // Only the visual depth is capped. The count represents every retained
+        // preview; each entry still follows the configured auto-dismiss policy.
         let captureScreen = NSScreen.screens.first { $0.displayID == result.displayID }
-        let window = QuickAccessWindow(
+        let item = QuickAccessItem(
             result: result,
             settings: settings,
             screen: captureScreen,
@@ -1621,24 +1614,24 @@ final class CaptureCoordinator {
         )
 
         // Persist the cloud URL to history when an upload succeeds from Quick Access.
-        window.onUploadSucceeded = { [weak self] urlString in
+        item.onUploadSucceeded = { [weak self] urlString in
             self?.historyCoordinator?.setCloudURL(id: entryID, url: urlString)
         }
 
-        // All callbacks capture the specific `window` weakly so the right
+        // All callbacks capture the specific `item` weakly so the right
         // stack slot gets dismissed — not whichever one happens to be newest.
-        window.onCopy = { [weak self, weak window] in
-            guard let self, let window else { return }
+        item.onCopy = { [weak self, weak item] in
+            guard let self, let item else { return }
             self.copyScreenshotToClipboard(
                 result,
                 entryID: entryID,
                 preferredFileURL: preferredFileURL,
                 pasteboard: pasteboard
             )
-            self.dismissQuickAccessWindow(window)
+            self.dismissQuickAccessItem(item)
         }
-        window.onSave = { [weak self, weak window] in
-            guard let self, let window else { return }
+        item.onSave = { [weak self, weak item] in
+            guard let self, let item else { return }
             let savedFileURL = self.saveImageToFile(result)
             if self.settings.screenshotAutoCopy,
                self.settings.screenshotClipboardContent == .filePath,
@@ -1650,45 +1643,45 @@ final class CaptureCoordinator {
                     pasteboard: pasteboard
                 )
             }
-            self.dismissQuickAccessWindow(window)
+            self.dismissQuickAccessItem(item)
         }
-        window.onAnnotate = { [weak self, weak window] in
-            guard let self, let window else { return }
-            let anchor = window.targetScreen
-            self.dismissQuickAccessWindow(window)
+        item.onAnnotate = { [weak self, weak item] in
+            guard let self, let item else { return }
+            let anchor = item.targetScreen
+            self.dismissQuickAccessItem(item)
             self.openAnnotationEditor(result, anchorScreen: anchor)
         }
-        window.onPreview = { [weak self, weak window] in
-            guard let self, let window else { return }
-            self.openQuickAccessPreview(result, anchorScreen: window.targetScreen)
+        item.onPreview = { [weak self, weak item] in
+            guard let self, let item else { return }
+            self.openQuickAccessPreview(result, anchorScreen: item.targetScreen)
         }
-        window.onPin = { [weak self, weak window] in
-            guard let self, let window else { return }
-            let anchor = window.frame
-            self.dismissQuickAccessWindow(window)
+        item.onPin = { [weak self, weak item] in
+            guard let self, let item else { return }
+            let anchor = item.frame
+            self.dismissQuickAccessItem(item)
             self.pinToScreen(result, anchor: anchor)
         }
-        window.onOCR = { [weak self, weak window] in
-            guard let self, let window else { return }
-            let anchor = window.targetScreen
-            self.dismissQuickAccessWindow(window)
+        item.onOCR = { [weak self, weak item] in
+            guard let self, let item else { return }
+            let anchor = item.targetScreen
+            self.dismissQuickAccessItem(item)
             self.ocrCoordinator?.startVisualOCR(image: result.image, anchorScreen: anchor)
         }
-        window.onTranslate = { [weak self, weak window] in
-            guard let self, let window else { return }
-            let anchor = window.targetScreen
-            self.dismissQuickAccessWindow(window)
+        item.onTranslate = { [weak self, weak item] in
+            guard let self, let item else { return }
+            let anchor = item.targetScreen
+            self.dismissQuickAccessItem(item)
             self.translationCoordinator?.translate(image: result.image, anchorScreen: anchor)
         }
-        window.onClose = { [weak self, weak window] in
-            guard let self, let window else { return }
-            self.dismissQuickAccessWindow(window)
+        item.onClose = { [weak self, weak item] in
+            guard let self, let item else { return }
+            self.dismissQuickAccessItem(item)
         }
 
-        quickAccessWindows.append(window)
-        window.show()
-        restackQuickAccessWindows()
-        return window
+        quickAccessItems.append(item)
+        restackQuickAccessItems()
+        item.activateAutoDismiss()
+        return item
     }
 
     private func openQuickAccessPreview(_ result: CaptureResult, anchorScreen: NSScreen?) {
@@ -1703,26 +1696,26 @@ final class CaptureCoordinator {
     }
 
     /// Remove the selected preview and reflow its display's pile or open list.
-    private func dismissQuickAccessWindow(_ window: QuickAccessWindow) {
-        guard let idx = quickAccessWindows.firstIndex(where: { $0 === window }) else {
+    private func dismissQuickAccessItem(_ item: QuickAccessItem) {
+        guard let idx = quickAccessItems.firstIndex(where: { $0 === item }) else {
             return
         }
-        quickAccessWindows.remove(at: idx)
-        window.close()
-        restackQuickAccessWindows()
+        quickAccessItems.remove(at: idx)
+        item.close()
+        restackQuickAccessItems()
     }
 
     /// Membership stays with capture actions; each display controller owns its
-    /// pile's hover, paging, and animated layout state.
-    private func restackQuickAccessWindows() {
-        let groups = Dictionary(grouping: quickAccessWindows) { $0.targetScreen.displayID }
+    /// pile's hover, scrolling, and animated layout state.
+    private func restackQuickAccessItems() {
+        let groups = Dictionary(grouping: quickAccessItems) { $0.targetScreen.displayID }
         for id in Array(quickAccessStacks.keys) where groups[id] == nil {
             quickAccessStacks.removeValue(forKey: id)?.stop()
         }
         for (id, windows) in groups {
-            let stack = quickAccessStacks[id] ?? QuickAccessStackController()
+            let stack = quickAccessStacks[id] ?? QuickAccessStackModel()
             quickAccessStacks[id] = stack
-            stack.update(windows: windows)
+            stack.update(items: windows)
         }
     }
 
@@ -1891,11 +1884,9 @@ final class CaptureCoordinator {
     /// user was already looking at.
     @discardableResult
     func invokeQuickAccessTranslateIfKey() -> Bool {
-        guard let key = NSApp.keyWindow as? QuickAccessWindow,
-              quickAccessWindows.contains(where: { $0 === key }),
-              let handler = key.onTranslate else {
-            return false
-        }
+        guard let stack = quickAccessStacks.values.first(where: { $0.panel === NSApp.keyWindow }),
+              let item = stack.items.first(where: { $0.id == stack.activeItemID }),
+              let handler = item.onTranslate else { return false }
         handler()
         return true
     }
