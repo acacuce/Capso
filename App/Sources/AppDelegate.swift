@@ -14,7 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static private(set) var shared: AppDelegate?
 
     #if DEBUG
-    private var previewDemo: QuickAccessWindow?
+    private var previewDemo: QuickAccessPreviewDemo?
     #endif
 
     private var menuBarController: MenuBarController?
@@ -42,7 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         #if DEBUG
         if CommandLine.arguments.contains("--preview-demo") {
-            previewDemo = QuickAccessPreviewDemo.makeWindow()
+            previewDemo = QuickAccessPreviewDemo()
             previewDemo?.show()
             return
         }

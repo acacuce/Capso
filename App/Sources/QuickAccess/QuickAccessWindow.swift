@@ -7,7 +7,6 @@ import ShareKit
 
 @MainActor
 final class QuickAccessWindow: NSPanel {
-    private static let cornerRadius: CGFloat = 14
 
     override var canBecomeKey: Bool { true }
 
@@ -23,11 +22,16 @@ final class QuickAccessWindow: NSPanel {
     var onUploadSucceeded: ((String) -> Void)?
 
     private lazy var snapMotion = QuickAccessSnapMotion(window: self)
-    private var wasDragged = false
+    weak var stackController: QuickAccessStackController?
+    private let stackPresentation = QuickAccessStackPresentation()
+    private var stackInteractionActive = false
+    private var externalDragActive = false
+    private var stackLayoutRevision = 0
     private var autoDismissTimer: Timer?
     private var alphaValueBeforeDrag: CGFloat?
     private let settings: AppSettings
     /// The screen this preview is anchored to (where the capture originated).
+    let initialStackOrigin: CGPoint
     let targetScreen: NSScreen
 
     init(
@@ -40,8 +44,8 @@ final class QuickAccessWindow: NSPanel {
         self.settings = settings
         self.targetScreen = screen ?? NSScreen.main ?? NSScreen.screens.first!
 
-        let windowWidth: CGFloat = 288
-        let windowHeight: CGFloat = 200
+        let windowWidth = QuickAccessStackStyle.panelSize.width
+        let windowHeight = QuickAccessStackStyle.panelSize.height
 
         let contentRect = QuickAccessStackGeometry.frame(
             position: settings.quickAccessPosition,
@@ -51,6 +55,8 @@ final class QuickAccessWindow: NSPanel {
             stackIndex: 0,
             stackCount: 1
         )
+
+        initialStackOrigin = contentRect.origin
 
         super.init(
             contentRect: contentRect,
@@ -100,12 +106,10 @@ final class QuickAccessWindow: NSPanel {
             onClose:     { [weak self] in self?.onClose?() }
         )
 
-        let hostingView = NSHostingView(rootView: view)
+        let hostingView = NSHostingView(rootView: QuickAccessStackCard(content: view, presentation: stackPresentation))
         hostingView.wantsLayer = true
         hostingView.layer?.backgroundColor = NSColor.clear.cgColor
-        hostingView.layer?.cornerRadius = Self.cornerRadius
-        hostingView.layer?.cornerCurve = .continuous
-        hostingView.layer?.masksToBounds = true
+        hostingView.layer?.masksToBounds = false
 
         NotificationCenter.default.addObserver(self, selector: #selector(screenGeometryChanged), name: NSApplication.didChangeScreenParametersNotification, object: nil)
 
@@ -121,6 +125,8 @@ final class QuickAccessWindow: NSPanel {
 
     private func hideDuringExternalDrag() {
         guard alphaValueBeforeDrag == nil else { return }
+        externalDragActive = true
+        stackController?.beginDrag(self)
         stopAutoDismissTimer()
         alphaValueBeforeDrag = alphaValue
         alphaValue = 0
@@ -128,6 +134,8 @@ final class QuickAccessWindow: NSPanel {
     }
 
     private func showAfterExternalDrag() {
+        externalDragActive = false
+        stackController?.endExternalDrag()
         alphaValue = alphaValueBeforeDrag ?? 1
         alphaValueBeforeDrag = nil
         ignoresMouseEvents = false
@@ -137,15 +145,16 @@ final class QuickAccessWindow: NSPanel {
     func show() {
         let finalFrame = frame
         var startFrame = finalFrame
-        startFrame.origin.y += 20
+        startFrame.origin.y += QuickAccessMotionStyle.entranceOffset
         setFrame(startFrame, display: false)
         alphaValue = 0
 
         orderFrontRegardless()
         makeKey()
+        snapMotion.move(to: finalFrame.origin)
 
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.3
+            ctx.duration = QuickAccessMotionStyle.fadeInDuration
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             self.animator().alphaValue = 1
         }
@@ -155,17 +164,28 @@ final class QuickAccessWindow: NSPanel {
 
     @objc private func screenGeometryChanged() {
         guard isVisible else { return }
-        snapMotion.snap(followsPointer: false)
+        if let stackController { stackController.screenChanged() }
+        else { snapMotion.snap(followsPointer: false) }
     }
 
     func beginPreviewDrag() {
-        wasDragged = true
+        stackController?.beginDrag(self)
         snapMotion.cancel()
         stopAutoDismissTimer()
     }
 
+    func cancelPreviewMotion() {
+        snapMotion.cancel()
+    }
+
+    func movePreviewDrag(to origin: CGPoint) {
+        if let stackController { stackController.moveDrag(self, to: origin) }
+        else { setFrameOrigin(origin) }
+    }
+
     func endPreviewDrag(velocity: CGPoint) {
-        snapMotion.snap(velocity: velocity)
+        if let stackController { stackController.endDrag(self, velocity: velocity) }
+        else { snapMotion.snap(velocity: velocity) }
         scheduleAutoDismissTimerIfNeeded()
     }
 
@@ -173,7 +193,7 @@ final class QuickAccessWindow: NSPanel {
         snapMotion.cancel()
         stopAutoDismissTimer()
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.2
+            ctx.duration = QuickAccessMotionStyle.fadeOutDuration
             self.animator().alphaValue = 0
         }, completionHandler: {
             super.close()
@@ -185,9 +205,9 @@ final class QuickAccessWindow: NSPanel {
         snapMotion.cancel()
         stopAutoDismissTimer()
         var target = frame
-        target.origin.x = -(target.width + 40)
+        target.origin.x = (screen ?? targetScreen).frame.minX - target.width - QuickAccessMotionStyle.evictionMargin
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.38
+            ctx.duration = QuickAccessMotionStyle.evictionDuration
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
             self.animator().setFrame(target, display: true)
             self.animator().alphaValue = 0
@@ -196,28 +216,59 @@ final class QuickAccessWindow: NSPanel {
         })
     }
 
-    /// Reposition this window within a stack, centering the group when requested.
-    func repositionForStack(index: Int, count: Int, animated: Bool = true) {
-        guard !wasDragged else { return }
-        let newFrame = QuickAccessStackGeometry.frame(
-            position: settings.quickAccessPosition,
-            screenFrame: targetScreen.frame,
-            visibleFrame: targetScreen.visibleFrame,
-            windowSize: frame.size,
-            stackIndex: index,
-            stackCount: count
-        )
-
-        if animated {
-            snapMotion.move(to: newFrame.origin)
-        } else {
-            setFrame(newFrame, display: true)
+    func applyStack(slot: QuickAccessStackLayout.Slot, count: Int, expanded: Bool,
+                    isFront: Bool, pageStart: Int, pageSize: Int, animated: Bool,
+                    velocity: CGPoint? = nil, visibleFrame: CGRect) {
+        stackLayoutRevision += 1
+        let revision = stackLayoutRevision
+        stackPresentation.angle = slot.angle
+        stackPresentation.scale = slot.scale
+        stackPresentation.count = count
+        stackPresentation.expanded = expanded
+        stackPresentation.isFront = isFront
+        stackPresentation.pageStart = pageStart
+        stackPresentation.pageSize = pageSize
+        stackPresentation.onExpand = { [weak self] in self?.stackController?.expand() }
+        stackPresentation.onPage = { [weak self] delta in self?.stackController?.page(by: delta) }
+        ignoresMouseEvents = !expanded && !isFront
+        guard slot.isVisible else {
+            ignoresMouseEvents = true
+            if animated && isVisible && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                snapMotion.move(to: slot.frame.origin, within: visibleFrame)
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = QuickAccessStackStyle.transitionDuration
+                    animator().alphaValue = 0
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + QuickAccessStackStyle.transitionDuration) { [weak self] in
+                    guard let self, self.stackLayoutRevision == revision else { return }
+                    self.snapMotion.cancel()
+                    self.orderOut(nil)
+                }
+            } else {
+                snapMotion.cancel()
+                orderOut(nil)
+            }
+            return
         }
+        let shouldAnimate = animated && isVisible
+        if !shouldAnimate { setFrame(slot.frame, display: true) }
+        if !externalDragActive {
+            alphaValue = 1
+            orderFrontRegardless()
+        }
+        if shouldAnimate { snapMotion.move(to: slot.frame.origin, velocity: velocity, within: visibleFrame) }
+    }
+
+    func setStackInteractionActive(_ active: Bool) {
+        guard stackInteractionActive != active else { return }
+        stackInteractionActive = active
+        if active { stopAutoDismissTimer() }
+        else { scheduleAutoDismissTimerIfNeeded() }
     }
 
     private func scheduleAutoDismissTimerIfNeeded() {
         stopAutoDismissTimer()
-        guard settings.quickAccessAutoClose else { return }
+        guard settings.quickAccessAutoClose, !stackInteractionActive, !externalDragActive else { return }
 
         autoDismissTimer = Timer.scheduledTimer(
             withTimeInterval: TimeInterval(settings.quickAccessAutoCloseInterval),

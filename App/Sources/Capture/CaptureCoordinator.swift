@@ -15,14 +15,11 @@ final class CaptureCoordinator {
     private let settings: AppSettings
     private var overlayWindows: [CaptureOverlayWindow] = []
     private var isSelectionFlowStarting = false
-    /// Stack of active preview windows:
-    /// - `[0]` is the OLDEST preview, anchored at the bottom-left primary slot
-    /// - `[N]` is the NEWEST preview, sitting at the top of the visual stack
-    /// - New captures append to the end, growing the stack upward
-    /// - When the stack overflows, `[0]` (the oldest) slides off-screen to
-    ///   the left and the rest shift down one slot
+    /// Retained previews in capture order (oldest first). Per-display stack
+    /// controllers present the newest card on top and expand on hover.
     private var quickAccessWindows: [QuickAccessWindow] = []
-    /// Maximum previews kept on-screen. Oldest is evicted when exceeded.
+    private var quickAccessStacks: [CGDirectDisplayID: QuickAccessStackController] = [:]
+    /// Retention is separate from the three-layer collapsed visual depth.
     private let maxQuickAccessStackSize = 5
     private var quickAccessPreviewWindow: QuickAccessPreviewWindow?
     private(set) var annotationWindow: AnnotationEditorWindow?
@@ -1607,9 +1604,8 @@ final class CaptureCoordinator {
         preferredFileURL: URL? = nil,
         pasteboard: NSPasteboard = .general
     ) -> QuickAccessWindow {
-        // If the stack is full, evict the oldest (the one anchored at the
-        // bottom slot) with a slide-off-left animation. The remaining
-        // previews will slide down one slot as part of the restack below.
+        // Keep the existing retention cap; older captures remain in History.
+        // The presentation controller caps the number of visible pile layers.
         while quickAccessWindows.count >= maxQuickAccessStackSize {
             let oldest = quickAccessWindows.removeFirst()
             oldest.slideOffLeftAndClose()
@@ -1690,8 +1686,8 @@ final class CaptureCoordinator {
         }
 
         quickAccessWindows.append(window)
-        restackQuickAccessWindows(excluding: window)
         window.show()
+        restackQuickAccessWindows()
         return window
     }
 
@@ -1706,8 +1702,7 @@ final class CaptureCoordinator {
         previewWindow.show()
     }
 
-    /// Remove a specific preview from the stack and close it, then slide the
-    /// remaining previews on the same screen down to collapse the gap.
+    /// Remove the selected preview and reflow its display's pile or open list.
     private func dismissQuickAccessWindow(_ window: QuickAccessWindow) {
         guard let idx = quickAccessWindows.firstIndex(where: { $0 === window }) else {
             return
@@ -1717,26 +1712,17 @@ final class CaptureCoordinator {
         restackQuickAccessWindows()
     }
 
-    /// Reposition all preview windows using per-screen stacking: windows on
-    /// the same screen share a stack (index 0 at the bottom, 1 above it, …),
-    /// independent of windows on other screens.
-    ///
-    /// - Parameter skipAnimation: A window to position without animation
-    ///   (used for the newly-created preview so it appears at the correct
-    ///   slot immediately before its show() fade-in).
-    private func restackQuickAccessWindows(excluding skipAnimation: QuickAccessWindow? = nil) {
-        // Group windows by their target screen's displayID, preserving order
-        // (oldest → newest within each group) so the oldest sits at index 0.
-        var perScreen: [CGDirectDisplayID: [QuickAccessWindow]] = [:]
-        for win in quickAccessWindows {
-            let id = win.targetScreen.displayID
-            perScreen[id, default: []].append(win)
+    /// Membership stays with capture actions; each display controller owns its
+    /// pile's hover, paging, and animated layout state.
+    private func restackQuickAccessWindows() {
+        let groups = Dictionary(grouping: quickAccessWindows) { $0.targetScreen.displayID }
+        for id in Array(quickAccessStacks.keys) where groups[id] == nil {
+            quickAccessStacks.removeValue(forKey: id)?.stop()
         }
-        for (_, windows) in perScreen {
-            for (i, win) in windows.enumerated() {
-                let animated = (win !== skipAnimation)
-                win.repositionForStack(index: i, count: windows.count, animated: animated)
-            }
+        for (id, windows) in groups {
+            let stack = quickAccessStacks[id] ?? QuickAccessStackController()
+            quickAccessStacks[id] = stack
+            stack.update(windows: windows)
         }
     }
 
