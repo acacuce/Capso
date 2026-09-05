@@ -5,6 +5,36 @@ import SharedKit
 
 @MainActor
 final class CaptureOverlayInteractionTests: XCTestCase {
+    func testDismissedOverlayIgnoresQueuedEscapeAndShortcutEvents() throws {
+        let (settings, suiteName) = makeSettings()
+        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+        let window = CaptureOverlayWindow(
+            screen: try XCTUnwrap(NSScreen.main),
+            settings: settings,
+            handlesGlobalKeyEvents: true
+        )
+        var cancellations = 0
+        var shortcuts = 0
+        window.onCancelled = { cancellations += 1 }
+        window.onShortcutAction = { _ in shortcuts += 1 }
+        window.deactivate()
+
+        let escape = try makeEscapeEvent(windowNumber: window.windowNumber)
+        window.handleGlobalKeyEvent(escape)
+        XCTAssertTrue(window.handleLocalKeyEvent(escape) === escape)
+        let shortcut = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil,
+            characters: "a", charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0
+        ))
+        window.handleGlobalKeyEvent(shortcut)
+        XCTAssertTrue(window.handleLocalKeyEvent(shortcut) === shortcut)
+        XCTAssertEqual(cancellations, 0)
+        XCTAssertEqual(shortcuts, 0)
+        XCTAssertFalse(window.isVisible)
+        XCTAssertEqual(window.animationBehavior, .none)
+    }
+
     func testEscapeEventClearsMultiSelectionWithoutCancellingOtherDisplayOverlay() throws {
         let (settings, defaultsSuiteName) = makeSettings()
         defer { UserDefaults.standard.removePersistentDomain(forName: defaultsSuiteName) }

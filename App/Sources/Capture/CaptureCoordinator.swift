@@ -596,6 +596,9 @@ final class CaptureCoordinator {
             return
         }
 
+        // Present the frozen desktop and dim selection layer in one update.
+        NSDisableScreenUpdates()
+        defer { NSEnableScreenUpdates() }
         showFreezeWindows(frozenScreens)
         let frozenImagesByDisplayID = Dictionary(
             uniqueKeysWithValues: frozenScreens.map { ($0.0.displayID, $0.1) }
@@ -885,6 +888,9 @@ final class CaptureCoordinator {
             selectableWindowsByID = [:]
         }
 
+        // Present the frozen desktop and dim selection layer in one update.
+        NSDisableScreenUpdates()
+        defer { NSEnableScreenUpdates() }
         showFreezeWindows(frozenScreens)
 
         // Step 2: Create transparent overlay windows (top layer) for selection
@@ -980,6 +986,7 @@ final class CaptureCoordinator {
             freezeWin.level = .screenSaver - 1
             freezeWin.isOpaque = true
             freezeWin.hasShadow = false
+            freezeWin.animationBehavior = .none
             freezeWin.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
             freezeWin.hidesOnDeactivate = false
 
@@ -1167,8 +1174,12 @@ final class CaptureCoordinator {
 
     private func dismissOverlay(notifyingCaptureEnd: Bool = true) {
         isSelectionFlowStarting = false
+        // Commit both layers together. Fading only the frozen desktop exposes
+        // an undimmed frame and can leave an old capture above the next one.
+        NSDisableScreenUpdates()
         dismissSelectionOverlays()
         dismissFreezeWindows()
+        NSEnableScreenUpdates()
         if notifyingCaptureEnd {
             NotificationCenter.default.post(name: .capsoCaptureDidEnd, object: nil)
         }
@@ -1184,19 +1195,10 @@ final class CaptureCoordinator {
     private func dismissFreezeWindows() {
         let windows = freezeWindows
         freezeWindows.removeAll()
-        if windows.isEmpty { return }
-
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.15
-            for window in windows {
-                window.animator().alphaValue = 0
-            }
-        }
-        // Clean up after animation
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            for window in windows {
-                window.orderOut(nil)
-            }
+        // Capture must be gone before a live capture or a replacement starts.
+        // No animator or delayed cleanup may retain a visible frozen desktop.
+        for window in windows {
+            window.orderOut(nil)
         }
     }
 

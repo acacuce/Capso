@@ -46,6 +46,7 @@ final class CaptureOverlayWindow: NSPanel {
     private var globalFlagsMonitor: Any?
     private var localEscMonitor: Any?
     private var localFlagsMonitor: Any?
+    private var presentationEnded = false
 
     init(
         screen: NSScreen,
@@ -68,6 +69,7 @@ final class CaptureOverlayWindow: NSPanel {
         self.isOpaque = false
         self.backgroundColor = .clear
         self.hasShadow = false
+        self.animationBehavior = .none
         self.ignoresMouseEvents = false
         self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         self.isMovable = false
@@ -111,8 +113,14 @@ final class CaptureOverlayWindow: NSPanel {
     override var canBecomeMain: Bool { false }
 
     func activate(mode: CaptureOverlayMode = .area) {
+        removeKeyMonitor()
+        presentationEnded = false
         overlayView.setMode(mode)
         overlayView.resetSelection()
+
+        // Render the dim layer before ordering in; avoid a transparent first frame.
+        overlayView.needsDisplay = true
+        displayIfNeeded()
 
         // Show the window. Non-activating panel won't activate our app.
         orderFrontRegardless()
@@ -140,6 +148,7 @@ final class CaptureOverlayWindow: NSPanel {
     }
 
     func deactivate() {
+        presentationEnded = true
         overlayView.restoreCursorIfNeeded()
         removeKeyMonitor()
         orderOut(nil)
@@ -173,14 +182,16 @@ final class CaptureOverlayWindow: NSPanel {
         // Installed for every overlay since the square lock is not gated on
         // multi-window selection. Double delivery (view + monitor) is a no-op.
         localFlagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            self?.overlayView.handleFlagsChanged(event)
+            if let self, !self.presentationEnded {
+                self.overlayView.handleFlagsChanged(event)
+            }
             return event
         }
     }
 
     func handleGlobalFlagsChanged(_ event: NSEvent) {
         let isShiftKey = event.keyCode == 56 || event.keyCode == 60
-        guard handlesGlobalKeyEvents,
+        guard !presentationEnded, handlesGlobalKeyEvents,
               allowsMultiWindowSelection,
               isShiftKey,
               !event.modifierFlags.contains(.shift) else { return }
@@ -188,7 +199,7 @@ final class CaptureOverlayWindow: NSPanel {
     }
 
     func handleGlobalKeyEvent(_ event: NSEvent) {
-        guard handlesGlobalKeyEvents else { return }
+        guard !presentationEnded, handlesGlobalKeyEvents else { return }
         switch event.keyCode {
         case 53:
             if overlayView.handleEscapeKey() { return }
@@ -205,7 +216,7 @@ final class CaptureOverlayWindow: NSPanel {
     /// Local monitors are app-wide. Leave events for other display overlays
     /// untouched so one key press is handled exactly once.
     func handleLocalKeyEvent(_ event: NSEvent) -> NSEvent? {
-        guard event.windowNumber == windowNumber else { return event }
+        guard !presentationEnded, event.windowNumber == windowNumber else { return event }
         if overlayView.handleCenterLockKeyEvent(event) {
             return nil
         }
