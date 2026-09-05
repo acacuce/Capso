@@ -3,7 +3,7 @@ import CaptureKit
 import SharedKit
 import ShareKit
 
-/// Screenshot data and actions. This is deliberately not a window: every item
+/// Capture data and actions. This is deliberately not a window: every item
 /// shares its display's SwiftUI stack host and keeps a stable identity.
 @MainActor
 final class QuickAccessItem: Identifiable {
@@ -11,6 +11,10 @@ final class QuickAccessItem: Identifiable {
     let targetScreen: NSScreen
     let initialStackOrigin: CGPoint
     private(set) var previewView: QuickAccessView?
+    private(set) var recordingView: RecordingPreviewView?
+    private var recordingState: RecordingPreviewState?
+
+    var isRecording: Bool { recordingView != nil }
     weak var stackController: QuickAccessStackModel?
     var onCopy: (() -> Void)?
     var onSave: (() -> Void)?
@@ -76,9 +80,27 @@ final class QuickAccessItem: Identifiable {
         previewView = view
     }
 
+    init(thumbnail: NSImage?, duration: String, fileSize: String,
+         state: RecordingPreviewState, settings: AppSettings, screen: NSScreen?) {
+        self.settings = settings
+        self.recordingState = state
+        targetScreen = screen ?? NSScreen.main ?? NSScreen.screens.first!
+        initialStackOrigin = QuickAccessStackGeometry.frame(position: settings.quickAccessPosition,
+            screenFrame: targetScreen.frame, visibleFrame: targetScreen.visibleFrame,
+            windowSize: QuickAccessStackStyle.cardSize, stackIndex: 0, stackCount: 1).origin
+        recordingView = RecordingPreviewView(
+            thumbnail: thumbnail, duration: duration, fileSize: fileSize, state: state,
+            onCopy: { [weak self] in self?.onCopy?() },
+            onSave: { [weak self] in self?.onSave?() },
+            onClose: { [weak self] in self?.onClose?() }
+        )
+    }
+
+    func cancelAutoDismissForSave() { dismissTask?.cancel() }
+
     func activateAutoDismiss() {
         dismissTask?.cancel()
-        guard settings.quickAccessAutoClose, !interactionActive else { return }
+        guard settings.quickAccessAutoClose, !interactionActive, recordingState?.isSaving != true else { return }
         let interval = settings.quickAccessAutoCloseInterval
         dismissTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(interval))

@@ -58,6 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.startTrial()
         captureCoordinator = CaptureCoordinator(settings: settings)
         recordingCoordinator = RecordingCoordinator(settings: settings)
+        recordingCoordinator!.quickAccessPreviews = captureCoordinator!.quickAccessPreviews
         ocrCoordinator = OCRCoordinator(settings: settings)
         translationCoordinator = TranslationCoordinator(settings: settings)
         historyCoordinator = HistoryCoordinator(settings: settings)

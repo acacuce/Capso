@@ -54,7 +54,7 @@ struct QuickAccessStackView: View {
 
     private var header: some View {
         HStack {
-            Label("\(stack.items.count) screenshots", systemImage: "square.on.square")
+            Label("\(stack.items.count) captures", systemImage: "square.on.square")
                 .font(.system(size: 12, weight: .medium))
                 .contentTransition(.numericText())
             Spacer()
@@ -98,8 +98,7 @@ private struct QuickAccessStackRow: View {
     let selected: Bool
 
     var body: some View {
-        if let content = entry.previewView {
-            content.keyboardActionsEnabled(selected)
+        content
                 .frame(width: QuickAccessStackStyle.cardSize.width, height: QuickAccessStackStyle.cardSize.height)
                 .modifier(QuickAccessCardShadow())
                 .scaleEffect(expanded ? 1 : max(QuickAccessStackStyle.minimumLayerScale, 1 - CGFloat(index) * QuickAccessStackStyle.layerScaleStep), anchor: .bottom)
@@ -113,6 +112,14 @@ private struct QuickAccessStackRow: View {
                     view.scaleEffect(QuickAccessStackStyle.scrollScale(y: geometry.frame(in: .scrollView).minY - rowOffset, expanded: expanded), anchor: .bottom)
                 }
                 .transition(.asymmetric(insertion: .offset(y: QuickAccessStackStyle.insertionOffset).combined(with: .opacity), removal: .opacity))
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if let screenshot = entry.previewView {
+            screenshot.keyboardActionsEnabled(selected)
+        } else if let recording = entry.recordingView {
+            recording
         }
     }
 

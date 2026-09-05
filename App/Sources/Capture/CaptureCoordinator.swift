@@ -17,8 +17,7 @@ final class CaptureCoordinator {
     private var isSelectionFlowStarting = false
     /// Retained previews in capture order (oldest first). Per-display stack
     /// controllers present the newest card on top and expand on hover.
-    private var quickAccessItems: [QuickAccessItem] = []
-    private var quickAccessStacks: [CGDirectDisplayID: QuickAccessStackModel] = [:]
+    let quickAccessPreviews = QuickAccessPreviewStore()
     private var quickAccessPreviewWindow: QuickAccessPreviewWindow?
     private(set) var annotationWindow: AnnotationEditorWindow?
     private var inlineAnnotationWindow: InlineAnnotationEditorWindow?
@@ -1680,9 +1679,7 @@ final class CaptureCoordinator {
             self.dismissQuickAccessItem(item)
         }
 
-        quickAccessItems.append(item)
-        restackQuickAccessItems()
-        item.activateAutoDismiss()
+        quickAccessPreviews.insert(item)
         return item
     }
 
@@ -1699,26 +1696,7 @@ final class CaptureCoordinator {
 
     /// Remove the selected preview and reflow its display's pile or open list.
     private func dismissQuickAccessItem(_ item: QuickAccessItem) {
-        guard let idx = quickAccessItems.firstIndex(where: { $0 === item }) else {
-            return
-        }
-        quickAccessItems.remove(at: idx)
-        item.close()
-        restackQuickAccessItems()
-    }
-
-    /// Membership stays with capture actions; each display controller owns its
-    /// pile's hover, scrolling, and animated layout state.
-    private func restackQuickAccessItems() {
-        let groups = Dictionary(grouping: quickAccessItems) { $0.targetScreen.displayID }
-        for id in Array(quickAccessStacks.keys) where groups[id] == nil {
-            quickAccessStacks.removeValue(forKey: id)?.stop()
-        }
-        for (id, windows) in groups {
-            let stack = quickAccessStacks[id] ?? QuickAccessStackModel()
-            quickAccessStacks[id] = stack
-            stack.update(items: windows)
-        }
+        quickAccessPreviews.remove(item)
     }
 
     private func openAnnotationEditor(
@@ -1886,7 +1864,7 @@ final class CaptureCoordinator {
     /// user was already looking at.
     @discardableResult
     func invokeQuickAccessTranslateIfKey() -> Bool {
-        guard let stack = quickAccessStacks.values.first(where: { $0.panel === NSApp.keyWindow }),
+        guard let stack = quickAccessPreviews.stacks.values.first(where: { $0.panel === NSApp.keyWindow }),
               let item = stack.items.first(where: { $0.id == stack.activeItemID }),
               let handler = item.onTranslate else { return false }
         handler()

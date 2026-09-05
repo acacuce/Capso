@@ -50,7 +50,7 @@ final class RecordingCoordinator {
     private var controlsWindow: RecordingControlsWindow?
     private var borderWindow: RecordingBorderWindow?
     private var cameraPiPWindow: CameraPiPWindow?
-    private var recordingPreviewWindow: RecordingPreviewWindow?
+    var quickAccessPreviews = QuickAccessPreviewStore()
     private var editorWindow: RecordingEditorWindow?
     private var editorCoordinator: EditorCoordinator?
     private var clickMonitor: ClickMonitor?
@@ -883,16 +883,13 @@ final class RecordingCoordinator {
 
     private func showRecordingPreview(thumbnail: NSImage?, duration: String, fileSize: String,
                                       tempURL: URL, format: RecordingKit.RecordingFormat) {
-        recordingPreviewWindow?.close()
-        recordingPreviewWindow = nil
-
         let state = RecordingPreviewState()
-        let window = RecordingPreviewWindow(
+        let item = QuickAccessItem(
             thumbnail: thumbnail, duration: duration, fileSize: fileSize,
-            state: state, settings: settings
+            state: state, settings: settings, screen: selectedScreen
         )
 
-        window.onCopy = { [weak self, weak window] in
+        item.onCopy = { [weak self, weak item] in
             // Ignore Copy if a save is already running — same reason we
             // disable the buttons in the view (avoid double-write races).
             guard !state.isSaving else { return }
@@ -900,7 +897,7 @@ final class RecordingCoordinator {
             state.isSaving = true
             state.saveProgress = 0
             state.progressLabel = String(localized: "Copying…")
-            window?.cancelAutoDismissForSave()
+            item?.cancelAutoDismissForSave()
 
             Task { @MainActor in
                 let copied = await self.copyRecordingToClipboard(
@@ -911,10 +908,10 @@ final class RecordingCoordinator {
                 }
 
                 if copied {
-                    self.recordingPreviewWindow?.close()
-                    self.recordingPreviewWindow = nil
+                    if let item { self.quickAccessPreviews.remove(item) }
                 } else {
                     state.isSaving = false
+                    item?.activateAutoDismiss()
                     state.saveProgress = 0
                     state.progressLabel = String(localized: "Saving…")
                     self.showRecordingCopyFailureAlert(format: format, previewAvailable: true)
@@ -922,7 +919,7 @@ final class RecordingCoordinator {
             }
         }
 
-        window.onSave = { [weak self, weak window] in
+        item.onSave = { [weak self, weak item] in
             guard let self else { return }
             // Ignore further clicks while a save is in flight — without
             // this guard, repeated clicks during a slow GIF export would
@@ -931,7 +928,7 @@ final class RecordingCoordinator {
             state.isSaving = true
             state.saveProgress = 0
             state.progressLabel = String(localized: "Saving…")
-            window?.cancelAutoDismissForSave()
+            item?.cancelAutoDismissForSave()
 
             Task { @MainActor in
                 let result = await self.exportRecording(tempURL, format: format) { progress in
@@ -943,28 +940,26 @@ final class RecordingCoordinator {
                 }
 
                 if result != nil {
-                    self.recordingPreviewWindow?.close()
-                    self.recordingPreviewWindow = nil
+                    if let item { self.quickAccessPreviews.remove(item) }
                 } else {
                     // Reset state so the buttons return and the user can
                     // retry without restarting the recording.
                     state.isSaving = false
+                    item?.activateAutoDismiss()
                     state.saveProgress = 0
                     self.showRecordingSaveFailureAlert(format: format)
                 }
             }
         }
 
-        window.onClose = { [weak self] in
+        item.onClose = { [weak self, weak item] in
             // Closing mid-export would orphan the temp file with no UI to
             // recover from. Block until the save finishes.
             guard !state.isSaving else { return }
-            self?.recordingPreviewWindow?.close()
-            self?.recordingPreviewWindow = nil
+            if let item { self?.quickAccessPreviews.remove(item) }
         }
 
-        window.show()
-        recordingPreviewWindow = window
+        quickAccessPreviews.insert(item)
     }
 
     private func startAutomaticClipboardCopyIfNeeded(
@@ -990,7 +985,7 @@ final class RecordingCoordinator {
             if !result.copied {
                 showRecordingCopyFailureAlert(
                     format: format,
-                    previewAvailable: self.recordingPreviewWindow != nil
+                    previewAvailable: self.quickAccessPreviews.items.contains { $0.isRecording }
                 )
             }
         }
